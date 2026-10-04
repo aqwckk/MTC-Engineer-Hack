@@ -1,0 +1,40 @@
+---
+# Полное развёртывание: узел -> кластер kubeadm -> платформа и приложение.
+# Всё сразу:
+#   ansible-playbook site.yml
+# Только узел и кластер:
+#   ansible-playbook site.yml --tags cluster
+# Только содержимое кластера:
+#   ansible-playbook site.yml --tags platform
+
+- name: Подготовка узла и создание кластера Kubernetes (kubeadm)
+  hosts: all
+  become: true
+  tags: [cluster]
+  environment:
+    KUBECONFIG: "{{ admin_kubeconfig }}"
+  pre_tasks:
+    - name: Проверить, что ОС поддерживается
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == "Ubuntu"
+          - ansible_facts['distribution_version'] is version("24.04", ">=")
+          - ansible_facts['architecture'] in arch_map
+        fail_msg: "Решение рассчитано на Ubuntu 24.04 (amd64/arm64)"
+        quiet: true
+  roles:
+    - node_prereqs
+    - containerd
+    - kubernetes
+    - cluster
+    - helm
+    - cni
+
+- name: Развёртывание платформы и демонстрационного приложения
+  hosts: all
+  become: false
+  tags: [platform]
+  environment:
+    KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}"
+  roles:
+    - platform

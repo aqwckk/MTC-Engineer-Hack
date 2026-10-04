@@ -1,0 +1,59 @@
+---
+- name: Создать каталог конфигурации Kubernetes
+  ansible.builtin.file:
+    path: /etc/kubernetes
+    state: directory
+    mode: "0755"
+
+- name: Сформировать конфигурацию kubeadm
+  ansible.builtin.template:
+    src: kubeadm-config.yaml.j2
+    dest: /etc/kubernetes/kubeadm-config.yaml
+    mode: "0600"
+
+- name: Инициализировать control-plane (kubeadm init)
+  ansible.builtin.command: kubeadm init --config /etc/kubernetes/kubeadm-config.yaml
+  args:
+    creates: "{{ admin_kubeconfig }}"
+
+- name: Дождаться готовности API-сервера
+  ansible.builtin.command: kubectl --kubeconfig {{ admin_kubeconfig }} get --raw /readyz
+  register: apiserver_ready
+  until: apiserver_ready.rc == 0
+  retries: 60
+  delay: 5
+  changed_when: false
+
+- name: Определить домашний каталог пользователя {{ deploy_user }}
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ deploy_user }}"
+
+- name: Создать каталог ~/.kube
+  ansible.builtin.file:
+    path: "{{ ansible_facts['getent_passwd'][deploy_user][4] }}/.kube"
+    state: directory
+    owner: "{{ deploy_user }}"
+    mode: "0700"
+
+- name: Выдать kubeconfig пользователю {{ deploy_user }}
+  ansible.builtin.copy:
+    src: "{{ admin_kubeconfig }}"
+    dest: "{{ ansible_facts['getent_passwd'][deploy_user][4] }}/.kube/config"
+    remote_src: true
+    owner: "{{ deploy_user }}"
+    mode: "0600"
+
+- name: Получить taints узлов
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ admin_kubeconfig }} get nodes
+    -o jsonpath='{.items[*].spec.taints[*].key}'
+  register: node_taints
+  changed_when: false
+
+- name: Разрешить рабочие нагрузки на control-plane (single-node)
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ admin_kubeconfig }} taint nodes --all
+    node-role.kubernetes.io/control-plane-
+  when: "'node-role.kubernetes.io/control-plane' in node_taints.stdout"
+  changed_when: true

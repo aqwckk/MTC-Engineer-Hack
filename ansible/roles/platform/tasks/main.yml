@@ -1,0 +1,179 @@
+---
+- name: Дождаться доступности API кластера
+  ansible.builtin.command: kubectl get --raw /readyz
+  register: api_ready
+  until: api_ready.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+
+# Базовые сервисы кластера
+# kubectl diff возвращает 0, только если кластер уже соответствует манифестам;
+# при расхождениях (или если объектов ещё нет) выполняется apply.
+- name: "local-path-provisioner (StorageClass по умолчанию): проверить расхождения (kubectl diff)"
+  ansible.builtin.command: kubectl diff -k {{ repo_root }}/k8s/storage
+  register: storage_diff
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "local-path-provisioner (StorageClass по умолчанию): применить (kubectl apply -k)"
+  ansible.builtin.command: kubectl apply -k {{ repo_root }}/k8s/storage
+  when: storage_diff.rc != 0
+  changed_when: true
+  register: storage_apply
+  retries: 3
+  delay: 10
+  until: storage_apply.rc == 0
+
+- name: "metrics-server: проверить расхождения (kubectl diff)"
+  ansible.builtin.command: kubectl diff -k {{ repo_root }}/k8s/metrics-server
+  register: metrics_server_diff
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "metrics-server: применить (kubectl apply -k)"
+  ansible.builtin.command: kubectl apply -k {{ repo_root }}/k8s/metrics-server
+  when: metrics_server_diff.rc != 0
+  changed_when: true
+  register: metrics_server_apply
+  retries: 3
+  delay: 10
+  until: metrics_server_apply.rc == 0
+
+- name: Установить cert-manager
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/helm_release.yml"
+  vars:
+    hr_name: cert-manager
+    hr_chart: oci://quay.io/jetstack/charts/cert-manager
+    hr_version: "{{ cert_manager_version }}"
+    hr_namespace: cert-manager
+    hr_values: "{{ repo_root }}/helm-values/cert-manager.yaml"
+
+- name: Установить Envoy Gateway (реализация Gateway API + CRD)
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/helm_release.yml"
+  vars:
+    hr_name: envoy-gateway
+    hr_chart: oci://docker.io/envoyproxy/gateway-helm
+    hr_version: "{{ envoy_gateway_version }}"
+    hr_namespace: envoy-gateway-system
+    hr_values: "{{ repo_root }}/helm-values/envoy-gateway.yaml"
+
+# Секреты: генерируются один раз на узле, в Git не хранятся
+- name: Создать namespace для мониторинга и логирования
+  ansible.builtin.command: kubectl apply -f {{ repo_root }}/k8s/{{ item }}/namespace.yaml
+  register: ns_apply
+  changed_when: "' created' in ns_apply.stdout or ' configured' in ns_apply.stdout"
+  loop:
+    - monitoring
+    - logging
+
+- name: Сгенерировать пароль Elasticsearch (если ещё не создан)
+  ansible.builtin.shell: |
+    set -o pipefail
+    if kubectl -n logging get secret elasticsearch-credentials >/dev/null 2>&1; then
+      echo exists
+    else
+      kubectl -n logging create secret generic elasticsearch-credentials \
+        --from-literal=username=elastic \
+        --from-literal=password="$(openssl rand -hex 16)"
+    fi
+  args:
+    executable: /bin/bash
+  register: es_secret
+  changed_when: "'created' in es_secret.stdout"
+  no_log: true
+
+- name: Передать учётные данные Elasticsearch в namespace monitoring (для Grafana)
+  ansible.builtin.shell: |
+    set -o pipefail
+    kubectl -n logging get secret elasticsearch-credentials -o json \
+      | jq 'del(.metadata.uid, .metadata.resourceVersion, .metadata.creationTimestamp, .metadata.managedFields, .metadata.annotations) | .metadata.namespace = "monitoring"' \
+      | kubectl apply -f -
+  args:
+    executable: /bin/bash
+  register: es_secret_copy
+  changed_when: "' created' in es_secret_copy.stdout or ' configured' in es_secret_copy.stdout"
+  no_log: true
+
+- name: Сгенерировать пароль администратора Grafana (если ещё не создан)
+  ansible.builtin.shell: |
+    set -o pipefail
+    if kubectl -n monitoring get secret grafana-admin >/dev/null 2>&1; then
+      echo exists
+    else
+      kubectl -n monitoring create secret generic grafana-admin \
+        --from-literal=admin-user=admin \
+        --from-literal=admin-password="$(openssl rand -hex 12)"
+    fi
+  args:
+    executable: /bin/bash
+  register: grafana_secret
+  changed_when: "'created' in grafana_secret.stdout"
+  no_log: true
+
+# Мониторинг
+- name: Установить kube-prometheus-stack
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/helm_release.yml"
+  vars:
+    hr_name: kps
+    hr_chart: kube-prometheus-stack
+    hr_repo: https://prometheus-community.github.io/helm-charts
+    hr_version: "{{ kube_prometheus_stack_version }}"
+    hr_namespace: monitoring
+    hr_values: "{{ repo_root }}/helm-values/kube-prometheus-stack.yaml"
+
+# Gateway, приложение, сбор логов, мониторы и алерты
+- name: "Манифесты решения (Gateway, приложение, мониторинг, логирование): проверить расхождения (kubectl diff)"
+  ansible.builtin.command: kubectl diff -k {{ repo_root }}/k8s
+  register: solution_diff
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: "Манифесты решения (Gateway, приложение, мониторинг, логирование): применить (kubectl apply -k)"
+  ansible.builtin.command: kubectl apply -k {{ repo_root }}/k8s
+  when: solution_diff.rc != 0
+  changed_when: true
+  register: solution_apply
+  retries: 3
+  delay: 10
+  until: solution_apply.rc == 0
+
+- name: Дождаться готовности Gateway
+  ansible.builtin.command: >-
+    kubectl -n edge wait gateway/demo-gateway --for=condition=Programmed --timeout=300s
+  changed_when: false
+
+- name: Дождаться выпуска TLS-сертификата
+  ansible.builtin.command: >-
+    kubectl -n edge wait certificate/demo-local-tls --for=condition=Ready --timeout=300s
+  changed_when: false
+
+- name: Дождаться готовности рабочих нагрузок
+  ansible.builtin.command: "kubectl -n {{ item.ns }} rollout status {{ item.kind }}/{{ item.name }} --timeout=600s"
+  changed_when: false
+  loop:
+    - { ns: demo, kind: deployment, name: web-v1 }
+    - { ns: demo, kind: deployment, name: web-v2 }
+    - { ns: logging, kind: statefulset, name: elasticsearch }
+    - { ns: logging, kind: daemonset, name: fluentd }
+    - { ns: monitoring, kind: deployment, name: grafana }
+    - { ns: monitoring, kind: statefulset, name: prometheus-kps-prometheus }
+  loop_control:
+    label: "{{ item.ns }}/{{ item.name }}"
+
+- name: Получить адрес узла
+  ansible.builtin.command: >-
+    kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+  register: node_address
+  changed_when: false
+
+- name: Итог
+  ansible.builtin.debug:
+    msg:
+      - "Развёртывание завершено."
+      - "Приложение:  curl http://{{ node_address.stdout }}:30080/"
+      - "Проверка:    make verify   (или ./scripts/verify.sh)"
+      - "Доступы:     make info"

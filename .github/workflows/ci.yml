@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Проверка конфигураций
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: yamllint
+        run: |
+          pipx install yamllint >/dev/null
+          yamllint .
+
+      - name: shellcheck
+        run: shellcheck deploy.sh scripts/*.sh
+
+      - name: Ansible syntax check
+        working-directory: ansible
+        run: ansible-playbook site.yml --syntax-check
+
+      - name: Сборка Kustomize и валидация схем (kubeconform)
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+          for dir in k8s k8s/storage k8s/metrics-server; do
+            kubectl kustomize "$dir" | ./kubeconform -strict -summary -ignore-missing-schemas \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          done
+
+      - name: Поиск секретов в репозитории (gitleaks)
+        run: |
+          curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+            | tar -xz gitleaks
+          ./gitleaks dir . --redact --no-banner
+
+  e2e:
+    name: Развёртывание kubeadm и smoke-тесты (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    needs: lint
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Развёртывание (./deploy.sh)
+        run: ./deploy.sh
+
+      - name: Smoke-тесты (./scripts/verify.sh)
+        run: ./scripts/verify.sh
+
+      - name: Идемпотентность — повторный запуск развёртывания
+        run: |
+          ./deploy.sh
+          ./scripts/verify.sh
+
+      - name: Диагностика при сбое
+        if: failure()
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get gatewayclass,gateway,httproute -A || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -n 80 || true
+          kubectl -n envoy-gateway-system logs deploy/envoy-gateway --tail=80 || true
+          kubectl -n logging logs ds/fluentd --tail=80 || true

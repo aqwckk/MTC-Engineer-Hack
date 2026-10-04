@@ -1,0 +1,16 @@
+---
+- name: Установить CNI Cilium
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/helm_release.yml"
+  vars:
+    hr_name: cilium
+    hr_chart: cilium
+    hr_repo: https://helm.cilium.io
+    hr_version: "{{ cilium_version }}"
+    hr_namespace: kube-system
+    hr_values: "{{ repo_root }}/helm-values/cilium.yaml"
+
+- name: Дождаться готовности узла
+  ansible.builtin.command: >-
+    kubectl --kubeconfig {{ admin_kubeconfig }} wait node --all
+    --for=condition=Ready --timeout=300s
+  changed_when: false

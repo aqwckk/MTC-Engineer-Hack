@@ -1,0 +1,54 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-platform
+  namespace: monitoring
+spec:
+  groups:
+    - name: demo-app
+      rules:
+        - alert: WebAppDown
+          expr: sum(nginx_up{namespace="demo"}) == 0 or absent(nginx_up{namespace="demo"})
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: Демонстрационное приложение недоступно
+            description: Ни один экземпляр nginx в namespace demo не отвечает экспортеру метрик.
+        - alert: WebAppReplicasDegraded
+          expr: kube_deployment_status_replicas_available{namespace="demo"} < kube_deployment_spec_replicas{namespace="demo"}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Деплоймент {{ $labels.deployment }} работает не в полном составе"
+    - name: demo-gateway
+      rules:
+        - alert: GatewayHigh5xxRate
+          expr: |
+            sum(rate(envoy_http_downstream_rq_xx{envoy_response_code_class="5"}[5m]))
+              / sum(rate(envoy_http_downstream_rq_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Более 5% запросов через Gateway завершаются ошибкой 5xx
+        - alert: GatewayHighLatencyP95
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(envoy_http_downstream_rq_time_bucket[5m]))) > 500
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: p95 времени ответа через Gateway превышает 500 мс
+    - name: demo-logging
+      rules:
+        - alert: FluentdOutputErrors
+          expr: sum(rate(fluentd_output_status_num_errors[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Fluentd не может доставить логи в Elasticsearch

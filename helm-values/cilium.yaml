@@ -1,0 +1,18 @@
+# Cilium в роли CNI: сеть подов + применение NetworkPolicy.
+# kube-proxy остаётся штатным (kubeadm), режим замены не используется.
+ipam:
+  mode: kubernetes
+operator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+hubble:
+  enabled: false
+envoy:
+  enabled: false

@@ -1,0 +1,81 @@
+# Prometheus Operator + Prometheus + Grafana + node-exporter + kube-state-metrics.
+fullnameOverride: kps
+
+# Alertmanager отключён для экономии ресурсов single-node стенда:
+# правила алертинга вычисляются Prometheus и видны на странице /alerts.
+alertmanager:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 2d
+    # Подхватывать ServiceMonitor/PodMonitor/PrometheusRule из всех namespace,
+    # а не только созданные самим чартом.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 1536Mi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 5Gi
+
+grafana:
+  fullnameOverride: grafana
+  # Учётные данные создаются при развёртывании и в репозитории не хранятся.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  envValueFrom:
+    ES_PASSWORD:
+      secretKeyRef:
+        name: elasticsearch-credentials
+        key: password
+  sidecar:
+    datasources:
+      uid: prometheus
+      alertmanager:
+        enabled: false
+  additionalDataSources:
+    - name: Elasticsearch
+      uid: elasticsearch
+      type: elasticsearch
+      access: proxy
+      url: http://elasticsearch.logging.svc:9200
+      basicAuth: true
+      basicAuthUser: elastic
+      jsonData:
+        index: "app-logs-*"
+        timeField: "@timestamp"
+        logMessageField: message
+        logLevelField: log_type
+      secureJsonData:
+        basicAuthPassword: $ES_PASSWORD
+  grafana.ini:
+    server:
+      root_url: https://grafana.demo.local:30443
+    analytics:
+      check_for_updates: false
+      reporting_enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 768Mi
+
+# kubeadm: метрики control-plane открыты в kubeadm-config (см. роль cluster).
+kubeEtcd:
+  service:
+    port: 2381
+    targetPort: 2381

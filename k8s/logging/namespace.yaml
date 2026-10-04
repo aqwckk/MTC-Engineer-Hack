@@ -1,0 +1,9 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    app.kubernetes.io/part-of: demo-platform
+    # Fluentd читает логи контейнеров через hostPath /var/log
+    pod-security.kubernetes.io/enforce: privileged

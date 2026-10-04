@@ -1,0 +1,52 @@
+---
+# containerd 2.x из официального репозитория Docker: Kubernetes >= 1.36
+# больше не поддерживает containerd 1.x из стандартного репозитория Ubuntu 24.04.
+- name: Подключить apt-репозиторий Docker (containerd.io)
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: deb
+    uris: https://download.docker.com/linux/ubuntu
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: stable
+    architectures: "{{ deb_arch }}"
+    signed_by: https://download.docker.com/linux/ubuntu/gpg
+  register: containerd_repo
+
+- name: Установить containerd
+  ansible.builtin.apt:
+    name: containerd.io
+    state: present
+    update_cache: "{{ containerd_repo.changed }}"
+
+- name: Сформировать конфигурацию containerd по умолчанию
+  ansible.builtin.command: /usr/bin/containerd config default
+  register: containerd_default_config
+  changed_when: false
+  check_mode: false
+
+- name: Записать конфигурацию containerd (CRI включён, cgroup driver = systemd)
+  ansible.builtin.copy:
+    dest: /etc/containerd/config.toml
+    content: "{{ containerd_default_config.stdout | regex_replace('SystemdCgroup = false', 'SystemdCgroup = true') }}\n"
+    mode: "0644"
+  register: containerd_config
+
+- name: Перезапустить containerd при изменении конфигурации
+  ansible.builtin.systemd_service:
+    name: containerd
+    state: restarted
+  when: containerd_config.changed
+
+- name: Включить и запустить containerd
+  ansible.builtin.systemd_service:
+    name: containerd
+    state: started
+    enabled: true
+
+- name: Настроить crictl на сокет containerd
+  ansible.builtin.copy:
+    dest: /etc/crictl.yaml
+    content: |
+      runtime-endpoint: unix:///run/containerd/containerd.sock
+      image-endpoint: unix:///run/containerd/containerd.sock
+    mode: "0644"

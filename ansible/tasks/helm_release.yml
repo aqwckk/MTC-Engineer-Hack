@@ -1,0 +1,47 @@
+---
+# Идемпотентная установка/обновление Helm-релиза.
+# Переменные: hr_name, hr_chart, hr_version, hr_namespace, hr_values, [hr_repo], [hr_timeout]
+#
+# Релиз обновляется только если изменилась версия чарта или файл values:
+# контрольная сумма values сохраняется в описании ревизии релиза.
+- name: "Helm {{ hr_name }}: контрольная сумма values"
+  ansible.builtin.stat:
+    path: "{{ hr_values }}"
+    checksum_algorithm: sha256
+  register: helm_values_stat
+
+- name: "Helm {{ hr_name }}: текущее состояние релиза"
+  ansible.builtin.command: helm status {{ hr_name }} --namespace {{ hr_namespace }} -o json
+  register: helm_current
+  changed_when: false
+  failed_when: false
+
+- name: "Helm {{ hr_name }}: определить необходимость установки"
+  ansible.builtin.set_fact:
+    helm_fingerprint: "chart={{ hr_version }} values={{ helm_values_stat.stat.checksum[:16] }}"
+    helm_up_to_date: >-
+      {{
+        helm_current.rc == 0
+        and (helm_current.stdout | from_json).info.status == 'deployed'
+        and (helm_current.stdout | from_json).info.description
+            == 'chart=' + hr_version + ' values=' + helm_values_stat.stat.checksum[:16]
+      }}
+
+- name: "Helm {{ hr_name }}: установить {{ hr_chart }} {{ hr_version }} в namespace {{ hr_namespace }}"
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['helm', 'upgrade', '--install', hr_name, hr_chart,
+         '--version', hr_version,
+         '--namespace', hr_namespace, '--create-namespace',
+         '--values', hr_values,
+         '--description', helm_fingerprint,
+         '--wait', '--timeout', hr_timeout | default('15m')]
+        + (['--repo', hr_repo] if hr_repo is defined else [])
+      }}
+  register: helm_result
+  when: not (helm_up_to_date | bool)
+  changed_when: true
+  retries: 2
+  delay: 15
+  until: helm_result.rc == 0

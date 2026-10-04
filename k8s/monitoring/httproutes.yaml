@@ -1,0 +1,56 @@
+---
+# Служебные интерфейсы доступны только по HTTPS: HTTP-запросы получают 301.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: https-redirect
+  namespace: monitoring
+spec:
+  parentRefs:
+    - name: demo-gateway
+      namespace: edge
+      sectionName: http
+  hostnames:
+    - grafana.demo.local
+    - prometheus.demo.local
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            port: 30443
+            statusCode: 301
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  parentRefs:
+    - name: demo-gateway
+      namespace: edge
+      sectionName: https
+  hostnames:
+    - grafana.demo.local
+  rules:
+    - backendRefs:
+        - name: grafana
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  parentRefs:
+    - name: demo-gateway
+      namespace: edge
+      sectionName: https
+  hostnames:
+    - prometheus.demo.local
+  rules:
+    - backendRefs:
+        - name: kps-prometheus
+          port: 9090

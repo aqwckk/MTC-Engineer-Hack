@@ -1,0 +1,30 @@
+---
+# Единая точка управления версиями и параметрами решения.
+
+# Kubernetes
+kubernetes_version: "1.37.1"
+kubernetes_minor: "{{ kubernetes_version.split('.')[:2] | join('.') }}"
+pod_subnet: "10.244.0.0/16"
+service_subnet: "10.96.0.0/12"
+node_ip: "{{ ansible_facts['default_ipv4']['address'] }}"
+
+# Инструменты
+helm_version: "v3.22.0"
+
+# Компоненты платформы (Helm charts / manifests)
+cilium_version: "1.20.2"
+cert_manager_version: "v1.21.2"
+envoy_gateway_version: "v1.9.2"
+kube_prometheus_stack_version: "91.9.0"
+
+# Пути
+repo_root: "{{ playbook_dir }}/.."
+admin_kubeconfig: /etc/kubernetes/admin.conf
+
+# Пользователь, запустивший deploy.sh: ему будет выдан kubeconfig.
+deploy_user: "{{ lookup('env', 'SUDO_USER') | default(lookup('env', 'USER'), true) }}"
+
+arch_map:
+  x86_64: amd64
+  aarch64: arm64
+deb_arch: "{{ arch_map[ansible_facts['architecture']] }}"

@@ -1,0 +1,21 @@
+# материалы хакатона и артефакты сдачи — не часть решения
+*.docx
+*.doc
+*.pdf
+*.zip
+*.rar
+Ссылка.txt
+submission/
+
+# локальные артефакты
+.DS_Store
+*.retry
+.venv/
+.idea/
+.vscode/
+
+# на случай случайного попадания секретов
+*.key
+*.pem
+kubeconfig
+.env

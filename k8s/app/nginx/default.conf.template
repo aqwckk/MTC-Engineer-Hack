@@ -1,0 +1,54 @@
+# Шаблон обрабатывается envsubst в entrypoint образа nginx:
+# подставляются только ${APP_VERSION} и ${APP_MESSAGE}.
+
+log_format json_access escape=json
+  '{'
+    '"timestamp":"$time_iso8601",'
+    '"remote_addr":"$remote_addr",'
+    '"x_forwarded_for":"$http_x_forwarded_for",'
+    '"request_id":"$http_x_request_id",'
+    '"method":"$request_method",'
+    '"host":"$host",'
+    '"uri":"$request_uri",'
+    '"protocol":"$server_protocol",'
+    '"status":$status,'
+    '"bytes_sent":$body_bytes_sent,'
+    '"request_time":$request_time,'
+    '"user_agent":"$http_user_agent",'
+    '"app_version":"${APP_VERSION}"'
+  '}';
+
+server {
+  listen 8080;
+  server_name _;
+
+  access_log /dev/stdout json_access;
+  error_log  /dev/stderr warn;
+
+  default_type text/plain;
+  add_header X-App-Version "${APP_VERSION}" always;
+
+  location = / {
+    return 200 "${APP_MESSAGE}\n";
+  }
+
+  location = /healthz {
+    access_log off;
+    return 200 "ok\n";
+  }
+
+  # всё остальное — 404 (попадает и в access-, и в error-лог)
+  location / {
+    root /usr/share/nginx/empty;
+  }
+}
+
+# Статус nginx для экспортера метрик; доступен только внутри пода.
+server {
+  listen 127.0.0.1:8081;
+  access_log off;
+
+  location = /stub_status {
+    stub_status;
+  }
+}

@@ -1,0 +1,7 @@
+---
+# Развёртывание выполняется на той же машине, где запущен deploy.sh
+# (single-node кластер: control-plane + рабочие нагрузки).
+all:
+  hosts:
+    localhost:
+      ansible_connection: local

@@ -1,0 +1,83 @@
+---
+# Базовый маршрут: любой Host, HTTP -> стабильная версия приложения.
+# Проверка: curl http://<NODE_IP>:30080/  ->  Hello World!
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-default
+spec:
+  parentRefs:
+    - name: demo-gateway
+      namespace: edge
+      sectionName: http
+  rules:
+    - backendRefs:
+        - name: web-v1
+          port: 80
+---
+# Расширенный маршрут для app.demo.local (HTTP и HTTPS):
+# hostname- и path-маршрутизация, header-based canary, traffic splitting, фильтры.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web-app
+spec:
+  parentRefs:
+    - name: demo-gateway
+      namespace: edge
+  hostnames:
+    - app.demo.local
+  rules:
+    # 1. Canary по заголовку: X-Canary: true -> всегда v2
+    - matches:
+        - headers:
+            - name: X-Canary
+              value: "true"
+      backendRefs:
+        - name: web-v2
+          port: 80
+    # 2. Маршрутизация по пути с перезаписью URL: /v1 и /v2 -> конкретная версия
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v1
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: web-v1
+          port: 80
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /v2
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: web-v2
+          port: 80
+    # 3. Traffic splitting: 90% -> v1 (stable), 10% -> v2 (canary)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - name: X-Content-Type-Options
+                value: nosniff
+      backendRefs:
+        - name: web-v1
+          port: 80
+          weight: 90
+        - name: web-v2
+          port: 80
+          weight: 10

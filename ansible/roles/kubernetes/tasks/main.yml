@@ -1,0 +1,40 @@
+---
+- name: Подключить apt-репозиторий Kubernetes (pkgs.k8s.io)
+  ansible.builtin.deb822_repository:
+    name: kubernetes
+    types: deb
+    uris: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor }}/deb/"
+    suites: /
+    signed_by: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_minor }}/deb/Release.key"
+  register: kubernetes_repo
+
+- name: Проверить установленную версию kubeadm
+  ansible.builtin.command: dpkg-query -W -f='${Version}' kubeadm
+  register: kubeadm_installed
+  changed_when: false
+  failed_when: false
+
+- name: Установить kubelet, kubeadm, kubectl фиксированной версии
+  ansible.builtin.apt:
+    name:
+      - "kubelet={{ kubernetes_version }}-*"
+      - "kubeadm={{ kubernetes_version }}-*"
+      - "kubectl={{ kubernetes_version }}-*"
+    state: present
+    update_cache: true
+    allow_change_held_packages: true
+  when: not (kubeadm_installed.stdout | default('')).startswith(kubernetes_version + '-')
+
+- name: Зафиксировать версии пакетов Kubernetes (apt-mark hold)
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+
+- name: Включить kubelet
+  ansible.builtin.systemd_service:
+    name: kubelet
+    enabled: true

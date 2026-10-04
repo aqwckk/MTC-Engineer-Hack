@@ -1,0 +1,55 @@
+---
+# Собственный удостоверяющий центр решения (cert-manager).
+# Приватные ключи генерируются внутри кластера и в репозиторий не попадают.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: demo-root-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: demo-local-root-ca
+  secretName: demo-root-ca
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: demo-ca
+spec:
+  ca:
+    secretName: demo-root-ca
+---
+# Wildcard-сертификат для HTTPS-listener'а Gateway; cert-manager перевыпускает его автоматически.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: demo-local-tls
+  namespace: edge
+spec:
+  secretName: demo-local-tls
+  duration: 2160h
+  renewBefore: 360h
+  dnsNames:
+    - demo.local
+    - "*.demo.local"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    name: demo-ca
+    kind: ClusterIssuer
